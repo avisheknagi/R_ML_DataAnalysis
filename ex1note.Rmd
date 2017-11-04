@@ -1,0 +1,148 @@
+---
+title: "'Impute or not' a story of missing Titanic data"
+output:
+  pdf_document: default
+  
+  df_print: paged
+  theme: simplex
+  html_document: default
+---
+
+
+
+## Quick Overview
+
+>###*Missingness is an inherent characteristics of any dataset. In this tutorial I will attempt to determine missingness in the Titanic   training dataset obtained from [Kaggle](https://www.kaggle.com/c/titanic/download/train.csv). Through **visualizing, analysing and 
+imputing** missing values with the help of [VIM](https://cran.r-project.org/web/packages/VIMGUI/vignettes/VIM-Imputation.pdf), [BaylorEdPsych and mvnmle](https://cran.r-project.org/web/packages/BaylorEdPsych/BaylorEdPsych.pdf), and [mice](https://cran.r-project.org/web/packages/mice/mice.pdf) packages written for R ver 3.4; I will attempt to fill-in the missing values with approximated predicted values*.
+
+####Visualize the data
+To start of let us read in the titanic data (*I saved it as train2*) and import the mice package. Next the *md.pattern* function will display a table with  the missing values. Of the **total n=864** observations, there are n=177 missing values for **Age** variable and n=687 missing values for **Deck** variable. 
+```{r, message=FALSE, warning=FALSE}
+train2<-read.csv("C:/Users/avi/Downloads/train2.csv")
+library (mice)
+md.pattern(train2)
+
+```
+Below *aggr* function give us similar information as the above table, expect in a pretty visual produced by the VIM library. The red areas represents missing values in proportions, about **19% of Age is missing** and about **77% of Deck** variable is missing.
+```{r, message=FALSE, warning=FALSE}
+library(VIM)
+aggr_plot<-aggr(train2, col=c('royalblue1','red1'), numbers=TRUE, sortVars=TRUE)
+
+```
+####MISSINGNESS ASSUMPTION
+
+Next I am going to use the [Little's test](https://cran.r-project.org/web/packages/BaylorEdPsych/BaylorEdPsych.pdf) to assess for missing completely at random (MCAR) assumption on the Age and Deck variables. MCAR assumption is satisfied if missing values are random and do not depend on the observed or missing values of y. [(Little, 1988)](http://www.jstor.org.proxy.lib.duke.edu/stable/pdf/2290157.pdf)\[(y_{obs},y_{mis})\]
+The Little's test is commonly used for checking the MCAR assumption; which, if found to be not significant, allows for rejection of the null hypothesis and it is safely assumed that ingnoring or dropping the missing values will not impact the analysis. Howerver, if the test is significant at p<.05 imputation is a resonable next step.
+
+To run Little's test, I will install BaylorEdPsych and mvnmle package. LittleMCAR (i.e., Little test) will gives us chi-square statistics with degree of freedom and p-value. In this case the p value is 0, indicating MCAR assumtions are not met, which also implies that missingness is not random and we will have to use impution techniques to approximate missing values.
+```{r, message=FALSE}
+library(BaylorEdPsych)
+library(mvnmle)
+```
+>LittleMCAR(train2)
+```{r, include=FALSE, message=FALSE,results=FALSE}
+LittleMCAR(train2)
+
+```
+$$\chi^2 = \sum \frac {(O - E)^2}{E}$$
+
+| Chi-square  |  df  | p-value |
+|------|-----|-----|
+| 543.8286 | 26 | 0 |
+
+
+####Imputing missing values
+
+Lets impute the missing values in Age and Deck variables, using the *rf random forest imputation method*; in the Multivariate Imputation by Chained Equations, MICE library. I decided to use Random Forest method becasue, it can handle both continious and categorial variable. 
+
+I decided to pick m=20 for imputation size, the conclusion was based on [Rubin's formula](https://books.google.com/books?id=cNvTIOLs_WMC&printsec=frontcover&dq=1.+Rubin+DB.+Multiple+Imputation+for+Nonresponse+in+Surveys.+John+Wiley+%26+Sons;+New+York:+1987.+pp.+1%E2%80%9323.pp.+75%E2%80%93147.&hl=en&sa=X&ved=0ahUKEwjq_7ybvKTXAhVEwiYKHfsMBfsQ6AEIMTAB#v=onepage&q&f=false) for relative efficiency:  $$1/(1+F/M)$$ where F is the fraction of missing information and M is the number of imputations.
+
+>***Note: it took approximately 45 min to run the imputation on Window 10 icore7, go grab few cups of coffee or tea:)***
+
+```{r, message=FALSE}
+tempData2 <- mice(train2,m=20, method= 'rf', seed=500)
+modelFit2 <- with(tempData2,lm(Survived~Age+Pclass+SibSp+Parch+Fare+Deck))
+summary(pool(modelFit2))
+```
+
+
+
+To check if the model can repoduce similar results, I will set higher seed value and re-run it. 
+```{r, message=FALSE}
+tempData2 <- mice(train2,m=20, method= 'rf', seed=245836)
+modelFit2 <- with(tempData2,lm(Survived~Age+Pclass+SibSp+Parch+Fare+Deck))
+summary(pool(modelFit2))
+
+```
+I plot the amount of variance from the two models (seed 500 and seed 245836), to visualize if there are any difference. They both produced similar predicted missing values.
+
+![caption](/Users/avi/Box Sync/Rplot03-b.png)
+
+
+If we visualize the complete data, we will see there are none. Great!
+```{r,message=FALSE}
+completeData2 <- complete(tempData2,1)
+
+
+library(VIM)
+aggr_plot<-aggr(completeData2, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE)
+
+```
+
+
+Next lets run a  Linear model of original data with missing values (the model will ignore the missing values) so we can plot it.
+```{r,message=FALSE}
+modelFit <-lm(Survived~Age+Pclass+SibSp+Parch+Fare+Deck, data=train2)
+summary(modelFit)
+confint.lm(modelFit)
+```
+
+
+
+
+Below I plotted the coefficients and 95% confidences interval from both the predicted and the original data in a forest plot. The results are very comparable, with predicted values showing tigher confidence intervals.
+```{r,message=FALSE}
+library(forestplot)
+
+#data for forest plot
+test_data <- data.frame(coef1=c(0.9922096929, -0.0070602395,-0.2137837799,-0.0426289510,0.0450752908,0.0007891985,0.0813493309,0.0277050171,0.1172520198,0.1122658806,0.0784496074,0.1309519637,-0.1698740807),
+                        coef2=c(0.9795878,-0.0087251,-0.0353452,0.0572773,-0.0661380,0.0008168,0.0414517,-0.1315700,0.0925135,0.0947487,-0.0997679,-0.2019162,-0.580609),
+                        low1=c(7.583006e-01,-9.859291e-03,-2.655729e-01,-7.459317e-02,3.668118e-03,1.243513e-05,-1.175626e-01,-1.580902e-01,-8.342528e-02,-9.480348e-02,-1.750453e-01,-2.101795e-01,-9.120255e-01),
+                        low2=c(0.5559768518,-0.0134284718,-0.2523714838,-0.0563506951,-0.1669929812,-0.0002686887,-0.2591061167,-0.4285432867,-0.2137718106,-0.2177068166,-0.5712773998,-0.8835254718,-1.5072196504),
+                        high1=c(1.226118747,-0.004261188,-0.161994698,-0.010664727,0.086482464,0.001565962,0.280261302,0.213500249,0.317929323,0.319335240,0.331944525,0.472083435,0.572277320),
+                        high2=c(1.403198706,-0.004021705,0.181681172,0.170905243,0.034717029,0.001902229,0.342009550,0.165403189,0.398798754,0.407204255,0.371741630,0.479693108,0.346001688))
+col_no <- grep("coef", colnames(test_data))
+row_names <- list(
+  list("(Intercept)", "Age", "Pclass", "SibSp","Parch","Fare","DeckB","DeckC","DeckD","DeckE","DeckF","DeckG","DeckT")
+)
+coef <- with(test_data, cbind(coef1, coef2))
+low <- with(test_data, cbind(low1, low2))
+high <- with(test_data, cbind(high1, high2))
+forestplot(row_names, coef, low, high,
+           title="Predicted missing data vs original data for Titanic survival",
+           zero = c(0.98, 1.02),
+           grid = structure(c(2^-.5, 2^.5), gp = gpar(col = "steelblue", lty=2)),
+           boxsize=0.25,
+           col=fpColors(box=c("royalblue", "gold"),
+                        line=c("darkblue", "orange"),
+                        summary=c("darkblue", "red")),
+           xlab="The estimates",
+           new_page = TRUE,
+           legend=c("Predicted model", "Original data"),
+           legend_args = fpLegend(pos = list("bottomright"),
+                                  r = unit(.1, "snpc"),
+                                  gp = gpar(col="#CCCCCC", lwd=1.5))) 
+```
+
+
+
+Thats is the end of the tutorial, now we can use the complete dataset for predicting survival for Titanic passengers.
+
+###Reference
+
+>Roderick J. A. Little. (1988). A Test of Missing Completely at Random for Multivariate Data with Missing Values. Journal of the American Statistical Association, 83(404), 1198-1202. doi:10.2307/2290157
+
+>RUBIN, D.B. (1978). Multiple imputations in sample surveys - a phenomenological Bayesian approach to nonresponse. Proceedings of the Survey Research Methods Section of the American Statistical Association, 20- 34. Also in Imputation and Editin E of Faulty or Missin E
+Survey Data, U.S. Dept. of Commerce, 1-23. 
+
+<a href="#top">Back to top</a>
